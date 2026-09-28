@@ -12,7 +12,8 @@
     {
       "binding": "DB",
       "database_name": "app-scholar-db",
-      "database_id": "COLOQUE_O_DATABASE_ID_AQUI"
+      "database_id": "62a2d80c-9489-4b5e-b778-f14c88de9f2c",
+      "remote": true
     }
   ]
 }
