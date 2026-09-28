@@ -1312,19 +1312,40 @@ function TelaSobre() {
         </Text>
 
         <Text style={estilos.avisoSobre}>
-          Os dados ficam somente na memória do aplicativo. Ao recarregar,
-          os cadastros são apagados. Não há conexão com uma API ou banco
-          de dados.
+          Os dados são salvos pela API no Cloudflare D1 e permanecem disponíveis após recarregar o aplicativo.
         </Text>
       </View>
     </ScrollView>
   );
 }
 
+// API Cloudflare
+
+const API_BASE = '/api';
+
+async function chamarApi(caminho, opcoes = {}) {
+  const resposta = await fetch(`${API_BASE}${caminho}`, {
+    ...opcoes,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(opcoes.headers || {}),
+    },
+  });
+
+  const corpo = await resposta.json().catch(() => ({}));
+
+  if (!resposta.ok) {
+    throw new Error(corpo.erro || `Erro HTTP ${resposta.status}`);
+  }
+
+  return corpo;
+}
+
 // principal
 
 export default function App() {
   const [dados, setDados] = useState(criarDadosVazios);
+  const [carregando, setCarregando] = useState(true);
 
   const [historico, setHistorico] = useState([
     { nome: 'HomeScreen', chave: 'inicio' },
@@ -1376,6 +1397,35 @@ export default function App() {
     ]);
   }
 
+  // Carrega os dados persistidos no Cloudflare D1.
+  useEffect(() => {
+    let ativo = true;
+
+    async function carregarDados() {
+      try {
+        const pares = await Promise.all(
+          MODULOS.map(async (modulo) => [
+            modulo.chave,
+            await chamarApi(`/${modulo.chave}`),
+          ])
+        );
+
+        if (ativo) {
+          setDados(Object.fromEntries(pares));
+        }
+      } catch (erro) {
+        if (ativo) {
+          setAviso(`Não foi possível carregar o banco: ${erro.message}`);
+        }
+      } finally {
+        if (ativo) setCarregando(false);
+      }
+    }
+
+    carregarDados();
+    return () => { ativo = false; };
+  }, []);
+
   // Faz o botão voltar la 
 
   useEffect(() => {
@@ -1410,47 +1460,31 @@ export default function App() {
     return () => clearTimeout(temporizador);
   }, [aviso]);
 
-  function salvarRegistro(modulo, valores, idRegistro) {
-    const registroSalvo = {
-      ...valores,
-      id:
-        idRegistro ||
-        `${modulo.chave}-${Date.now()}-${Math.random()
-          .toString(36)
-          .slice(2, 8)}`,
-    };
+  async function salvarRegistro(modulo, valores, idRegistro) {
+    try {
+      const registroSalvo = await chamarApi(
+        `/${modulo.chave}${idRegistro ? `/${encodeURIComponent(idRegistro)}` : ''}`,
+        {
+          method: idRegistro ? 'PUT' : 'POST',
+          body: JSON.stringify(valores),
+        }
+      );
 
-    setDados((anteriores) => {
-      let listaAtualizada;
+      setDados((anteriores) => {
+        const listaAtualizada = idRegistro
+          ? anteriores[modulo.chave].map((item) =>
+              item.id === idRegistro ? registroSalvo : item
+            )
+          : [...anteriores[modulo.chave], registroSalvo];
 
-      if (idRegistro) {
-        listaAtualizada = anteriores[modulo.chave].map((item) => {
-          if (item.id === idRegistro) {
-            return registroSalvo;
-          }
+        return { ...anteriores, [modulo.chave]: listaAtualizada };
+      });
 
-          return item;
-        });
-      } else {
-        listaAtualizada = [
-          ...anteriores[modulo.chave],
-          registroSalvo,
-        ];
-      }
-
-      return {
-        ...anteriores,
-        [modulo.chave]: listaAtualizada,
-      };
-    });
-
-    voltarParaLista(modulo);
-
-    setAviso(
-      idRegistro
-        ? 'Alterações salvas.'
-        : 'Cadastro realizado com sucesso.'
-    );
+      voltarParaLista(modulo);
+      setAviso(idRegistro ? 'Alterações salvas.' : 'Cadastro realizado com sucesso.');
+    } catch (erro) {
+      setAviso(`Erro ao salvar: ${erro.message}`);
+    }
   }
 
   function pedirExclusao(modulo, registro) {
@@ -1476,23 +1510,28 @@ export default function App() {
     });
   }
 
-  function excluirRegistro() {
+  async function excluirRegistro() {
     const { modulo, registro } = janela;
 
-    setDados((anteriores) => {
-      const listaAtualizada = anteriores[modulo.chave].filter((item) => {
-        return item.id !== registro.id;
+    try {
+      await chamarApi(`/${modulo.chave}/${encodeURIComponent(registro.id)}`, {
+        method: 'DELETE',
       });
 
-      return {
+      setDados((anteriores) => ({
         ...anteriores,
-        [modulo.chave]: listaAtualizada,
-      };
-    });
+        [modulo.chave]: anteriores[modulo.chave].filter(
+          (item) => item.id !== registro.id
+        ),
+      }));
 
-    setJanela(null);
-    voltarParaLista(modulo);
-    setAviso('Registro excluído.');
+      setJanela(null);
+      voltarParaLista(modulo);
+      setAviso('Registro excluído.');
+    } catch (erro) {
+      setJanela(null);
+      setAviso(`Erro ao excluir: ${erro.message}`);
+    }
   }
 
   function mostrarDetalhes(modulo, registro) {
@@ -1502,6 +1541,16 @@ export default function App() {
       modulo,
       registro,
     });
+  }
+
+  if (carregando) {
+    return (
+      <SafeAreaView style={estilos.areaSegura}>
+        <View style={[estilos.app, { alignItems: 'center', justifyContent: 'center' }]}>
+          <Text style={estilos.texto}>Carregando dados...</Text>
+        </View>
+      </SafeAreaView>
+    );
   }
 
   return (
